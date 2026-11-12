@@ -1,0 +1,27 @@
+﻿<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>타브만든댕 — 소리를 연주로</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header><a class="brand" href="/" aria-label="타브만든댕 홈"><span class="brand-icon">≋</span> 타브만든댕<span class="badge">LOCAL STUDIO</span></a><span class="privacy"><i></i> 음원은 내 기기에서만 분석해요</span></header>
+<main>
+<section class="intro"><div class="eyebrow">FROM SOUND TO STRINGS</div><h1>좋아하는 소리,<br>이제 <span>직접 연주해요.</span></h1><p>노래를 넣고, 기타 타브로 바꿔보세요.<br>귀로 듣던 멜로디를 손끝으로 옮기는 작은 작업실.</p><div class="intro-tag">♫ &nbsp; 일렉기타 · 멜로디 타브 생성기</div></section>
+<div class="workspace">
+<section class="card source"><div class="section-title"><span class="step">01</span><h2>음원 준비하기</h2></div>
+<label class="drop" id="drop"><input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac"><span class="upload-icon">↥</span><strong id="fileLabel">음원을 여기에 놓아주세요</strong><span id="fileMeta">또는 클릭해서 파일 선택</span><small>MP3, WAV, M4A 등 브라우저가 지원하는 음원 · 최대 100MB</small></label>
+<div class="demo-row"><span>음원이 아직 없나요?</span><button id="demo" class="text-button">샘플 멜로디 불러오기 ↗</button></div>
+<div id="playerBox" hidden><audio id="player" controls preload="metadata"></audio><canvas id="wave" height="64" aria-label="업로드한 음원의 파형"></canvas></div>
+<div class="divider"></div><div class="section-title"><span class="step">02</span><h2>연주 설정</h2></div>
+<div class="settings"><label>기타 튜닝<select id="tuning"><option value="standard">Standard · E A D G B e</option><option value="dropD">Drop D · D A D G B e</option><option value="half">Half Step Down · E♭ A♭ D♭ G♭ B♭ e♭</option></select></label><label>최대 프렛<select id="frets"><option value="12">12 프렛 · 편한 운지</option><option value="17">17 프렛</option><option value="24" selected>24 프렛 · 넓은 음역</option></select></label><label>분석 시작 (초)<input id="start" type="number" min="0" value="0" step="0.1"></label><label>분석 길이<select id="length"><option value="15">15초</option><option value="30" selected>30초</option><option value="60">60초</option><option value="90">90초</option></select></label></div>
+<button id="generate" class="primary" disabled><span>타브 만들기</span><span>↗</span></button><button id="cancel" class="secondary" hidden>분석 취소</button><progress id="progress" max="100" value="0" hidden></progress><p id="status" role="status" aria-live="polite">음원을 선택하면 시작할 수 있어요.</p>
+</section>
+<section class="card result"><div class="result-top"><div class="section-title"><span class="step">03</span><h2>나의 기타 타브</h2></div><span class="badge">TAB PREVIEW</span></div>
+<div id="empty" class="empty"><div class="tab-art" aria-hidden="true"><span>e ────────<b>7</b>─────</span><span>B ───<b>5</b>──────────</span><span>G ──────<b>4</b>───────</span><span>D ──────────────</span><span>A ──────────────</span><span>E ──────────────</span></div><h3>다음 연주는 여기서 시작돼요</h3><p>음원을 선택하고 ‘타브 만들기’를 눌러주세요.<br>분석한 멜로디를 6줄 타브로 보여드릴게요.</p></div>
+<div id="output" hidden><div id="stats" class="stats"></div><div class="legend">위쪽이 1번 줄 · 숫자는 프렛 · 시간은 원곡 기준</div><div id="tab" class="tab-scroll"></div><div class="actions"><button id="download" class="secondary">↓ TXT 저장</button><button id="json" class="secondary">↓ 노트 JSON</button><button id="print" class="secondary">인쇄 / PDF</button></div><details><summary>분석한 노트 살펴보기</summary><div class="table-scroll"><table><thead><tr><th>시작</th><th>길이</th><th>음</th><th>줄</th><th>프렛</th></tr></thead><tbody id="notes"></tbody></table></div></details></div>
+<div class="note"><span>ⓘ</span><p><strong>멜로디가 선명할수록 더 잘 만들어요.</strong><br>이 버전은 한 번에 한 음을 추정합니다. 반주·보컬이 섞인 곡, 코드, 빠른 솔로와 벤딩은 부정확할 수 있어요. 기타 독주나 분리된 기타 트랙을 추천해요.</p></div></section>
+</div><footer><span>작은 멜로디에서, 나만의 연주까지.</span><span>타브만든댕 · LOCAL FIRST</span></footer>
+</main></body></html>
