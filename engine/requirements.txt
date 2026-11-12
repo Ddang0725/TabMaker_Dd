@@ -1,0 +1,5 @@
+numpy==1.26.4
+torch==2.0.1
+torchaudio==2.0.2
+demucs==4.0.1
+imageio-ffmpeg==0.6.0

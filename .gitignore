@@ -2,3 +2,15 @@ __pycache__/
 *.pyc
 .browser-test/
 .chrome-test*/
+*_test*.log
+*-test.log
+_prepare_test.py
+_smoke.html
+_test_result.txt
+_test_server.py
+desktop-test.txt
+desktop-test.png
+desktop-test-demo.wav
+.ai/
+ai-engine.json
+models/
