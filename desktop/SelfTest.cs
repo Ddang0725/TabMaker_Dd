@@ -84,7 +84,7 @@ namespace TabMaker {
                 Assert(studio.Tab.Rhythm.Bpm==120,"Invalid manual BPM does not corrupt beat grid");
                 if(withAi) {
                     Transcription ai=AiEngine.Run(demo,0,5,true,true,CancellationToken.None,delegate{});
-                    Assert(ai.Source=="demucs_6s_guitar" && File.Exists(ai.StemPath),"Real Demucs inference via EXE backend, not note-accuracy validation");
+                    Assert((ai.Source=="demucs_6s_guitar" || ai.Source=="mel_band_roformer_guitar") && File.Exists(ai.StemPath),"Real separation inference via EXE backend, not note-accuracy validation");
                 }
                 studio.Seek(notes[3].Start+.03);
                 studio.Find<Button>("PlayButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

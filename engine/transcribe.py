@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import wave
+import tempfile
 
 os.environ.setdefault('OMP_NUM_THREADS', '4')
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '4')
@@ -272,6 +273,111 @@ def write_wav(path, stereo):
         w.writeframes((data*32767).astype('<i2').tobytes())
 
 
+def separate_roformer(stereo, model_home):
+    """Use the locally installed guitar checkpoint, without model-list downloads."""
+    import logging
+    import soundfile as sf
+    from audio_separator.separator import Separator
+    from audio_separator.separator.uvr_lib_v5.roformer import mel_band_roformer as architecture
+    import torch
+    home = Path(model_home) / 'guitar-roformer'
+    checkpoint, config = home / 'becruily_guitar.ckpt', home / 'config.yaml'
+    if not checkpoint.is_file() or not config.is_file():
+        raise RuntimeError('새 기타 모델이 설치되지 않았습니다. 고급엔진설치.bat을 실행해주세요.')
+
+    class LocalSeparator(Separator):
+        def download_model_files(self, model_filename):
+            # The upstream loader accepts this tuple; never fetch a global catalog.
+            self.model_is_uvr_vip = False
+            self.model_friendly_name = 'becruily guitar Mel-Band RoFormer'
+            return (checkpoint.name, 'MDXC', self.model_friendly_name,
+                    str(checkpoint), str(config))
+
+    with tempfile.TemporaryDirectory(prefix='tabmaker-roformer-') as temp:
+        source = Path(temp) / 'input.wav'
+        sf.write(str(source), stereo.T, 44100, subtype='FLOAT')
+        separator = LocalSeparator(
+            log_level=logging.WARNING, model_file_dir=str(home), output_dir=temp,
+            output_format='WAV', output_single_stem='Guitar', use_soundfile=True,
+            normalization_threshold=1.0,
+            mdxc_params=dict(segment_size=256, override_model_segment_size=False,
+                             batch_size=1, overlap=4, pitch_shift=0))
+        # audio-separator 0.48.0 accepts mlp_expansion_factor but omits it when
+        # constructing MaskEstimator. This checkpoint requires factor 1, not 4.
+        original_class = architecture.MelBandRoformer
+        class ConfiguredRoformer(original_class):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                factor = kwargs.get('mlp_expansion_factor', 4)
+                if factor != 4:
+                    self.mask_estimators = torch.nn.ModuleList([
+                        architecture.MaskEstimator(
+                            dim=kwargs['dim'], dim_inputs=estimator.dim_inputs,
+                            depth=kwargs.get('mask_estimator_depth', 2),
+                            mlp_expansion_factor=factor)
+                        for estimator in self.mask_estimators])
+        architecture.MelBandRoformer = ConfiguredRoformer
+        try:
+            separator.load_model(checkpoint.name)
+        finally:
+            architecture.MelBandRoformer = original_class
+        emit('기타 전용 RoFormer로 분리하고 있어요', 15)
+        outputs = separator.separate(str(source))
+        if len(outputs) != 1:
+            raise RuntimeError('기타 전용 모델의 출력이 하나가 아닙니다. 모델 설정을 확인해주세요.')
+        path = Path(outputs[0])
+        if not path.is_absolute(): path = Path(temp) / path
+        data, rate = sf.read(str(path), dtype='float32', always_2d=True)
+        if rate != 44100 or data.shape != stereo.T.shape or not np.isfinite(data).all():
+            raise RuntimeError('분리 결과의 길이/샘플레이트/채널이 원곡 구간과 일치하지 않습니다.')
+        return data.T.copy()
+
+
+def basic_pitch_notes(stereo, start=0.0, polyphonic=True):
+    import soundfile as sf
+    from basic_pitch import FilenameSuffix, build_icassp_2022_model_path
+    from basic_pitch.inference import predict
+    # Select the shipped ONNX model explicitly, independent of installed TF.
+    model = build_icassp_2022_model_path(FilenameSuffix.onnx)
+    if not model.is_file():
+        raise RuntimeError('Basic Pitch ONNX 모델이 없습니다. 고급엔진설치.bat을 다시 실행해주세요.')
+    with tempfile.TemporaryDirectory(prefix='tabmaker-pitch-') as temp:
+        path = Path(temp) / 'guitar.wav'
+        sf.write(str(path), mono_for_analysis(stereo), 44100, subtype='FLOAT')
+        _, _, events = predict(path, model, minimum_note_length=80,
+                               minimum_frequency=440*2**((38-69)/12),
+                               maximum_frequency=440*2**((88-69)/12))
+    return convert_pitch_events(events, stereo.shape[1]/44100, start, polyphonic)
+
+
+def convert_pitch_events(events, duration, start=0.0, polyphonic=True):
+    notes = []
+    for first, last, midi, strength, *_ in events:
+        if not all(math.isfinite(float(x)) for x in (first, last, midi, strength)):
+            raise ValueError('채보 모델에서 유효하지 않은 노트가 반환되었습니다.')
+        first, last = max(0.0, float(first)), min(duration, float(last))
+        if last <= first or not 38 <= midi <= 88: continue
+        notes.append(dict(start=start+first, duration=last-first, midi=int(midi),
+                          confidence=float(np.clip(strength, 0, 1))))
+    if not polyphonic:
+        # Monophonic selection is post-processing, not lead-guitar separation.
+        edges = sorted({t for n in notes for t in (n['start'], n['start']+n['duration'])})
+        selected = []
+        for first, last in zip(edges, edges[1:]):
+            candidates = [n for n in notes if n['start'] <= (first+last)/2 < n['start']+n['duration']]
+            if not candidates: continue
+            best = max(candidates, key=lambda n: (n['confidence'], n['midi']))
+            identity = (best['start'], best['midi'])
+            if selected and selected[-1][0] == identity and abs(selected[-1][1]['start']+selected[-1][1]['duration']-first)<1e-7:
+                selected[-1][1]['duration'] = last-selected[-1][1]['start']
+            else:
+                selected.append((identity, dict(best, start=first, duration=last-first)))
+        notes = [n for _, n in selected if n['duration'] >= .075]
+    return sorted([dict(n, start=round(n['start'],5), duration=round(n['duration'],5),
+                        confidence=round(n['confidence'],3)) for n in notes],
+                  key=lambda n:(n['start'],n['midi']))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input',required=True)
@@ -282,6 +388,8 @@ def main():
     parser.add_argument('--part',choices=['poly','lead'],default='poly')
     parser.add_argument('--model-home')
     parser.add_argument('--threshold',type=float,default=.32)
+    parser.add_argument('--separator',choices=['demucs','roformer'],default='demucs')
+    parser.add_argument('--transcriber',choices=['harmonic','basic-pitch'],default='harmonic')
     args = parser.parse_args()
     emit('원곡 BPM과 박 위치를 분석하고 있어요',5)
     original = read_audio(args.input,args.start,args.duration)
@@ -289,16 +397,21 @@ def main():
     if args.mode == 'mix':
         if not args.model_home:
             raise RuntimeError('기타 분리 모델 경로를 지정해주세요.')
-        guitar = separate_guitar(original,Path(args.model_home))
+        guitar = (separate_roformer if args.separator=='roformer' else separate_guitar)(original,Path(args.model_home))
     else:
         guitar = original
     emit('기타의 여러 음과 실제 시작 시점을 채보하고 있어요',75)
-    notes = multipitch(mono_for_analysis(guitar)[::2],22050,args.start,polyphonic=args.part=='poly',threshold=args.threshold)
+    if args.transcriber == 'basic-pitch':
+        notes = basic_pitch_notes(guitar,args.start,polyphonic=args.part=='poly')
+    else:
+        notes = multipitch(mono_for_analysis(guitar)[::2],22050,args.start,polyphonic=args.part=='poly',threshold=args.threshold)
     output = Path(args.output)
     output.parent.mkdir(parents=True,exist_ok=True)
     stem_path = output.with_suffix('.guitar.wav')
     write_wav(stem_path,guitar)
-    result = dict(**rhythm,notes=notes,source='demucs_6s_guitar' if args.mode=='mix' else 'isolated_guitar',
+    source = ('mel_band_roformer_guitar' if args.separator=='roformer' else 'demucs_6s_guitar') if args.mode=='mix' else 'isolated_guitar'
+    result = dict(**rhythm,notes=notes,source=source,transcriber=args.transcriber,
+                  inputPath=str(Path(args.input).resolve()),part=args.part,
                   stem=str(stem_path),stemStart=args.start,downbeatDetected=False)
     temporary = output.with_suffix('.tmp')
     temporary.write_text(json.dumps(result,ensure_ascii=False,allow_nan=False),encoding='utf-8')

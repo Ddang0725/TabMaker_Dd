@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 import numpy as np
-from transcribe import tempo_and_beats, multipitch, separate_guitar, mono_for_analysis
+from transcribe import tempo_and_beats, multipitch, separate_guitar, mono_for_analysis, convert_pitch_events
 
 
 def pluck(midis, seconds=1.6, rate=22050):
@@ -51,6 +51,20 @@ def test():
     signal=pluck([64])
     assert np.max(np.abs(mono_for_analysis(np.stack([signal,-signal]))))>.01
     checks.append('Phase-inverted stereo guitar is not cancelled')
+    events=[(-.05,.4,64,.8,None),(.2,.6,67,.9,None),(.65,.9,67,.7,None),(.9,1.2,69,.8,None)]
+    poly=convert_pitch_events(events,1,12,True)
+    assert poly[0]['start']==12 and poly[-1]['start']+poly[-1]['duration']==13
+    lead=convert_pitch_events(events,1,12,False)
+    assert [n['midi'] for n in lead]==[64,67,67,69],lead
+    assert all(a['start']+a['duration']<=b['start']+1e-5 for a,b in zip(lead,lead[1:])),lead
+    assert lead[1]['start']==12.2 and lead[2]['start']==12.65,lead
+    checks.append('Learned-model event boundaries, offset, lead overlap and repeated notes')
+    try:
+        convert_pitch_events([(0,float('nan'),64,.8,None)],1)
+        raise AssertionError('Non-finite model events must fail')
+    except ValueError:
+        pass
+    checks.append('Non-finite model output rejected')
     print(json.dumps(dict(passed=checks),ensure_ascii=False,indent=2))
 
 

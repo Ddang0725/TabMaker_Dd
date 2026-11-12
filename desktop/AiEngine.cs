@@ -23,11 +23,15 @@ namespace TabMaker {
             if(File.Exists(settings)) {
                 var config=Serializer().Deserialize<Dictionary<string,string>>(File.ReadAllText(settings,Encoding.UTF8));
                 if(!config.ContainsKey("python") || !File.Exists(config["python"])) throw new IOException("ai-engine.json의 python 경로를 확인해주세요.");
-                return new[]{config["python"],config.ContainsKey("models") ? config["models"] : Path.Combine(root,"models")};
+                string separator=config.ContainsKey("separator") ? config["separator"] : "demucs";
+                string transcriber=config.ContainsKey("transcriber") ? config["transcriber"] : "harmonic";
+                if(separator!="demucs" && separator!="roformer") throw new IOException("지원하지 않는 기타 분리 모델입니다.");
+                if(transcriber!="harmonic" && transcriber!="basic-pitch") throw new IOException("지원하지 않는 채보 모델입니다.");
+                return new[]{config["python"],config.ContainsKey("models") ? config["models"] : Path.Combine(root,"models"),separator,transcriber};
             }
             foreach(string home in new[]{Path.Combine(root,".ai"),Path.Combine(Directory.GetParent(root.TrimEnd(Path.DirectorySeparatorChar)).FullName,"음원분리댕")}) {
                 string python=Path.Combine(home,home.EndsWith(".ai") ? "Scripts\\python.exe" : ".venv\\Scripts\\python.exe");
-                if(File.Exists(python)) return new[]{python,Path.Combine(home,"models")};
+                if(File.Exists(python)) return new[]{python,Path.Combine(home,"models"),"demucs","harmonic"};
             }
             throw new IOException("기타 분석 엔진을 찾지 못했어요. 음원분리댕의 AI 엔진을 설치하거나 ai-engine.json에 Python과 모델 경로를 지정해주세요.");
         }
@@ -48,11 +52,12 @@ namespace TabMaker {
             ProcessStartInfo info=new ProcessStartInfo(environment[0]) {
                 UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,
                 StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8,
-                Arguments="-u "+Quote(script)+" --input "+Quote(input)+" --output "+Quote(output)+" --start "+start.ToString("R",CultureInfo.InvariantCulture)+" --duration "+duration.ToString("R",CultureInfo.InvariantCulture)+" --mode "+(mixture ? "mix" : "guitar")+" --part "+(polyphonic ? "poly" : "lead")+" --model-home "+Quote(environment[1])
+                Arguments="-u "+Quote(script)+" --input "+Quote(input)+" --output "+Quote(output)+" --start "+start.ToString("R",CultureInfo.InvariantCulture)+" --duration "+duration.ToString("R",CultureInfo.InvariantCulture)+" --mode "+(mixture ? "mix" : "guitar")+" --part "+(polyphonic ? "poly" : "lead")+" --model-home "+Quote(environment[1])+" --separator "+environment[2]+" --transcriber "+environment[3]
             };
             info.EnvironmentVariables["PYTHONUTF8"]="1";
             info.EnvironmentVariables["PYTHONUNBUFFERED"]="1";
             info.EnvironmentVariables["TORCH_HOME"]=environment[1];
+            info.EnvironmentVariables["PATH"]=Path.GetDirectoryName(environment[0])+Path.PathSeparator+Environment.GetEnvironmentVariable("PATH");
             string error="";
             object gate=new object();
             using(Process process=new Process {StartInfo=info}) {

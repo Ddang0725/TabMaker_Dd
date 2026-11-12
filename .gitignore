@@ -14,3 +14,6 @@ desktop-test-demo.wav
 .ai/
 ai-engine.json
 models/
+.ai-upgrade/
+ai-engine.backup-*.json
+ai-engine.pending

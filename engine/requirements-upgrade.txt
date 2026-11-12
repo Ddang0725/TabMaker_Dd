@@ -1,0 +1,8 @@
+# Isolated Python 3.10 environment; never install over the sibling app.
+numpy==2.2.6
+torch==2.5.1
+torchaudio==2.5.1
+audio-separator[cpu]==0.48.0
+basic-pitch[onnx]==0.4.0
+imageio-ffmpeg==0.6.0
+resampy==0.4.2
