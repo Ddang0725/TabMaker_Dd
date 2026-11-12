@@ -17,6 +17,7 @@ namespace TabMaker {
         double VisibleUnits { get { return Rhythm.Available ? BarsVisible*Rhythm.Meter : SecondsVisible; } }
         double UnitAt(double time) { return Rhythm.Available ? Rhythm.BeatAt(time) : time; }
         double TimeAt(double unit) { return Rhythm.Available ? Rhythm.TimeAt(unit) : unit; }
+        public double ScreenFraction(double time) { return (UnitAt(time)-viewStart)/VisibleUnits; }
         public event Action<double> Seek;
         static readonly Brush Ink = new SolidColorBrush(Color.FromRgb(43,57,48));
         static readonly Brush Green = new SolidColorBrush(Color.FromRgb(46,104,73));
@@ -33,7 +34,10 @@ namespace TabMaker {
         public void Update(double position) {
             Position = position;
             double first=UnitAt(RangeStart),last=UnitAt(RangeEnd);
-            if (Follow) viewStart = Math.Max(first, Math.Min(Math.Max(first,last-VisibleUnits), UnitAt(position)-VisibleUnits*.24));
+            if (Follow) {
+                double current=UnitAt(Math.Max(RangeStart,Math.Min(Math.Max(RangeStart,RangeEnd-.000001),position)));
+                viewStart=Math.Floor(current/VisibleUnits)*VisibleUnits;
+            }
             InvalidateVisual();
         }
         public void ResetView() { viewStart = UnitAt(RangeStart); Update(Position); }
@@ -99,7 +103,7 @@ namespace TabMaker {
                 Text(dc,n.Fret < 0 ? "?" : n.Fret.ToString(), x-6,y-10,14,current ? Brushes.White : Ink);
             }
             if(UnitAt(Position) >= viewStart && UnitAt(Position) <= viewStart + VisibleUnits) {
-                double x = left+(UnitAt(Position)-viewStart)/VisibleUnits*width;
+                double x = left+ScreenFraction(Position)*width;
                 dc.DrawLine(new Pen(new SolidColorBrush(Color.FromRgb(224,121,55)),2),new Point(x,47),new Point(x,top+spacing*5+18));
                 dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(224,121,55)),null,new Point(x,49),4,4);
             }

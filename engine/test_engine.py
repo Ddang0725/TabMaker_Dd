@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 import numpy as np
-from transcribe import tempo_and_beats, multipitch, separate_guitar, mono_for_analysis, convert_pitch_events
+from transcribe import tempo_and_beats, multipitch, separate_guitar, mono_for_analysis, convert_pitch_events, fit_beat_grid
 
 
 def pluck(midis, seconds=1.6, rate=22050):
@@ -18,6 +18,14 @@ def pluck(midis, seconds=1.6, rate=22050):
 
 def test():
     checks=[]
+    times=.14+np.arange(400)*60/131.25+np.random.default_rng(3).normal(0,.007,400)
+    fitted=fit_beat_grid(times)
+    assert fitted and abs(fitted['bpm']-131.25)<.02,fitted
+    assert abs(fitted['gridOrigin']-.14)<.005,fitted
+    checks.append('Stable beat grid refines BPM and phase without long-song drift')
+    varying=np.cumsum(np.linspace(.35,.65,120))
+    assert fit_beat_grid(varying) is None
+    checks.append('Changing tempo is not mislabeled as a stable grid')
     for bpm in (80,100,120,150,180):
         rate=11025; samples=np.zeros(rate*16)
         rng=np.random.default_rng(42)

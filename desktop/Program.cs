@@ -24,6 +24,7 @@ namespace TabMaker {
         public TabView Tab = new TabView();
         WavePlayer player = new WavePlayer();
         DispatcherTimer timer = new DispatcherTimer {Interval = TimeSpan.FromMilliseconds(16)};
+        DispatcherTimer rhythmInputTimer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(250)};
         CancellationTokenSource cancellation;
         string path = "";
         bool ready, playing, updatingSlider, dragging, closed;
@@ -31,6 +32,7 @@ namespace TabMaker {
         int resultTuning, resultFrets;
         string stemPath="", resultSource="";
         double detectedBpm;
+        List<Note> candidateNotes=new List<Note>(), leadNotes=new List<Note>();
         public T Find<T>(string name) where T : class { return Window.FindName(name) as T; }
         public Studio() {
             using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MainWindow.xaml")) Window = (Window)XamlReader.Load(stream);
@@ -53,6 +55,29 @@ namespace TabMaker {
             Button("ApplyRhythm").Click += delegate { ApplyRhythm(); };
             Button("TempoHalf").Click += delegate { ScaleTempo(.5); };
             Button("TempoDouble").Click += delegate { ScaleTempo(2); };
+            rhythmInputTimer.Tick+=delegate { rhythmInputTimer.Stop(); if(cancellation==null && ready) ApplyRhythm(); };
+            Find<TextBox>("Bpm").TextChanged+=delegate {
+                if(cancellation!=null || !ready || string.IsNullOrWhiteSpace(Find<TextBox>("Bpm").Text)) return;
+                // The visible BPM field controls the GUI tempo, including tiny edits.
+                Combo("GridMode").SelectedIndex=0;
+                rhythmInputTimer.Stop(); rhythmInputTimer.Start();
+            };
+            Combo("Meter").SelectionChanged+=delegate { if(cancellation==null && ready && Tab.Rhythm.Available) ApplyRhythm(); };
+            Combo("GridMode").SelectionChanged+=delegate { if(cancellation==null && ready && Tab.Rhythm.Available) ApplyRhythm(); };
+            Button("AlignFirstBar").Click += delegate {
+                if(!ready) return;
+                player.Pause(); playing=false; Button("PlayButton").Content="▶ 재생";
+                Find<TextBox>("FirstBar").Text=player.Position.TotalSeconds.ToString("0.000000",CultureInfo.InvariantCulture);
+                ApplyRhythm();
+            };
+            Combo("Part").SelectionChanged += delegate {
+                if(candidateNotes.Count==0 || cancellation!=null) return;
+                Tab.Notes=Combo("Part").SelectedIndex==0 ? candidateNotes : leadNotes;
+                if(Combo("Part").SelectedIndex==0) Analysis.FingerPolyphonic(Tab.Notes,Analysis.Tunings[resultTuning],resultFrets);
+                else Analysis.Finger(Tab.Notes,Analysis.Tunings[resultTuning],resultFrets);
+                Find<TextBlock>("Summary").Text=Tab.Notes.Count+"개 추정 노트 · "+(Combo("Part").SelectedIndex==0 ? "코드 후보" : "단음 멜로디 후보")+" · 실제 기타 파트인지 확인해주세요.";
+                Tick();
+            };
             Combo("Speed").SelectionChanged += delegate { if(ready) player.SpeedRatio = Selected(Combo("Speed")); };
             Combo("Speed").ToolTip="재생 속도를 바꾸면 음 높이도 함께 달라집니다.";
             Combo("Zoom").SelectionChanged += delegate { Tab.BarsVisible=(int)Selected(Combo("Zoom")); Tab.SecondsVisible=Tab.BarsVisible*5; Tab.Update(player.Position.TotalSeconds); };
@@ -92,7 +117,7 @@ namespace TabMaker {
             Window.PreviewKeyDown += delegate(object sender, KeyEventArgs e) {
                 if (e.Key == Key.Space && !(Keyboard.FocusedElement is TextBox) && !(Keyboard.FocusedElement is ComboBox)) { TogglePlayback(); e.Handled = true; }
             };
-            Window.Closed += delegate { closed = true; if(cancellation != null) cancellation.Cancel(); timer.Stop(); player.Close(); };
+            Window.Closed += delegate { closed = true; if(cancellation != null) cancellation.Cancel(); timer.Stop(); rhythmInputTimer.Stop(); player.Close(); };
             timer.Tick += delegate { Tick(); }; timer.Start();
         }
         Button Button(string name) { return Find<Button>(name); }
@@ -114,7 +139,9 @@ namespace TabMaker {
             } catch (Exception e) { Status(e.Message); }
         }
         void ClearResult() {
+            rhythmInputTimer.Stop();
             Tab.Rhythm=new BeatMap(); detectedBpm=0; stemPath=""; resultSource="";
+            candidateNotes=new List<Note>(); leadNotes=new List<Note>();
             Find<TextBox>("Bpm").Text=""; Find<TextBox>("FirstBar").Text="0";
             Find<TextBlock>("RhythmInfo").Text="BPM·박 위치는 자동 추정합니다. 박자표와 첫 마디는 확인 후 보정해주세요.";
             Tab.Notes = new List<Note>(); Tab.RangeStart = 0; Tab.RangeEnd = 0; Tab.ResetView();
@@ -126,7 +153,8 @@ namespace TabMaker {
             foreach(string name in new[]{"OpenButton","DemoButton"}) Button(name).IsEnabled = !busy;
             Button("AnalyzeButton").IsEnabled = !busy && ready;
             foreach(string name in new[]{"Tuning","Frets","Length","InputMode","Part"}) Combo(name).IsEnabled = !busy;
-            foreach(string name in new[]{"ApplyRhythm","TempoHalf","TempoDouble"}) Button(name).IsEnabled=!busy;
+            foreach(string name in new[]{"ApplyRhythm","TempoHalf","TempoDouble","AlignFirstBar"}) Button(name).IsEnabled=!busy;
+            Combo("GridMode").IsEnabled=!busy;
             Find<TextBox>("Start").IsEnabled = !busy;
             Button("CancelButton").Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             Find<ProgressBar>("Progress").Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -148,18 +176,21 @@ namespace TabMaker {
                     Transcription parsed=AiEngine.Run(path,start,length,mixture,polyphonic,operation.Token,delegate(string stage,int percent) {
                         Window.Dispatcher.BeginInvoke(new Action(delegate { if(!closed && cancellation==operation) { Status(stage); Find<ProgressBar>("Progress").Value=percent; } }));
                     });
-                    Analysis.FingerPolyphonic(parsed.Notes,Analysis.Tunings[tuning],frets);
                     return parsed;
                 });
                 operation.Token.ThrowIfCancellationRequested(); if(closed) return;
-                List<Note> result=transcription.Notes;
+                candidateNotes=transcription.CandidateNotes; leadNotes=transcription.LeadNotes;
+                List<Note> result=polyphonic ? candidateNotes : leadNotes;
+                if(polyphonic) Analysis.FingerPolyphonic(result,Analysis.Tunings[tuning],frets);
+                else Analysis.Finger(result,Analysis.Tunings[tuning],frets);
                 analysisStart = start; analysisEnd = Math.Min(start + length,duration);
                 resultTuning = tuning; resultFrets = frets;
                 stemPath=transcription.StemPath; resultSource=transcription.Source;
                 Tab.Rhythm=transcription.Rhythm; detectedBpm=Tab.Rhythm.Bpm;
                 Tab.Rhythm.Meter=(int)Selected(Combo("Meter"));
-                Find<TextBox>("Bpm").Text=Tab.Rhythm.Available ? Tab.Rhythm.Bpm.ToString("0.##",CultureInfo.InvariantCulture) : "";
-                Find<TextBox>("FirstBar").Text=Tab.Rhythm.Origin.ToString("0.000",CultureInfo.InvariantCulture);
+                Tab.Rhythm.UseDetectedBeats=Combo("GridMode").SelectedIndex==1;
+                Find<TextBox>("Bpm").Text=Tab.Rhythm.Available ? Tab.Rhythm.Bpm.ToString("0.####",CultureInfo.InvariantCulture) : "";
+                Find<TextBox>("FirstBar").Text=Tab.Rhythm.Origin.ToString("0.000000",CultureInfo.InvariantCulture);
                 RhythmInfo(); Button("StemExport").IsEnabled=File.Exists(stemPath);
                 Tab.Notes = result; Tab.Tuning = Analysis.Tunings[tuning]; Tab.RangeStart = analysisStart; Tab.RangeEnd = analysisEnd;
                 Tab.ResetView();
@@ -176,7 +207,7 @@ namespace TabMaker {
         void RhythmInfo() {
             BeatMap rhythm=Tab.Rhythm;
             Find<TextBlock>("RhythmInfo").Text=rhythm.Available ?
-                (rhythm.ManualTempo ? "수동 BPM" : "자동 BPM · 박 추정 "+(rhythm.Confidence<.25 ? "불확실" : "확인 필요"))+" · "+rhythm.Meter+"박 기준 · 첫 마디는 자동 확정하지 않습니다." :
+                (rhythm.UseDetectedBeats && !rhythm.ManualTempo ? "검출 박 추적" : "고정 BPM 격자")+" · BPM은 4분음표 기준 · "+rhythm.Meter+"/"+rhythm.BeatUnit+" · 첫 강박에서 일시정지 후 ‘현재 위치를 첫 마디로’를 누르세요." :
                 "규칙적인 박을 찾지 못했어요. BPM과 첫 마디를 입력하면 마디선을 표시합니다.";
         }
         void ScaleTempo(double scale) {
@@ -193,7 +224,8 @@ namespace TabMaker {
             }
             Tab.Rhythm.Bpm=bpm; Tab.Rhythm.Origin=first;
             Tab.Rhythm.Meter=(int)Selected(Combo("Meter"));
-            Tab.Rhythm.ManualTempo=detectedBpm==0 || Math.Abs(bpm-detectedBpm)>.025;
+            Tab.Rhythm.UseDetectedBeats=Combo("GridMode").SelectedIndex==1;
+            Tab.Rhythm.ManualTempo=detectedBpm==0 || Math.Abs(bpm-detectedBpm)>.000001;
             Tab.ResetView(); RhythmInfo(); Tick();
             Status("박자선을 적용했어요. 실제 음 시작 시점은 유지하고 마디 기준만 바꿨습니다.");
         }
@@ -228,13 +260,14 @@ namespace TabMaker {
             Find<TextBlock>("Clock").Text = Format(time) + " / " + Format(duration);
             if(!dragging) { updatingSlider = true; Find<Slider>("Timeline").Value = time; updatingSlider = false; }
             Tab.Update(time);
+            Find<TextBlock>("GuiBeatClock").Text=Tab.Rhythm.Available ? "적용 "+Tab.Rhythm.Bpm.ToString("0.####",CultureInfo.InvariantCulture)+" BPM   "+string.Join("   ",Enumerable.Range(1,Tab.Rhythm.Meter).Select(i=>(i==Tab.Rhythm.BeatInBar(time) ? "● " : "○ ")+i)) : "BPM을 입력하면 박 표시가 재생 시간에 맞춰 움직입니다.";
             Find<TextBlock>("BarPosition").Text=Tab.Rhythm.Available ? (Tab.Rhythm.BarAt(time)>0 ? Tab.Rhythm.BarAt(time)+"마디 · "+Tab.Rhythm.BeatInBar(time)+"박" : "첫 마디 전") : "BPM 분석 전 / 수동 입력";
             List<int> active=TabView.ActiveIndices(Tab.Notes,time);
             Find<TextBlock>("CurrentNote").Text = active.Count>0 ? string.Join("  /  ",active.Select(i=>Tab.Notes[i].Name+(Tab.Notes[i].Fret>=0 ? " · "+(Tab.Notes[i].String+1)+"번줄 "+Tab.Notes[i].Fret+"프렛" : " · 배치 불가"))) : Tab.Notes.Count>0 ? (time < analysisStart || time >= analysisEnd ? "분석 구간 밖" : "쉼 / 다음 음 대기") : "대기 중";
         }
         string TextTab() {
             StringBuilder text = new StringBuilder("타브만든댕 — " + Path.GetFileName(path) + "\r\n튜닝: " + ((ComboBoxItem)Combo("Tuning").Items[resultTuning]).Content + " · 최대 " + resultFrets + "프렛\r\n시간은 원곡 기준 초 · 텍스트 칸 간격은 박자와 무관 · ? = 음역 밖/운지 배치 불가\r\n");
-            if(Tab.Rhythm.Available) text.AppendLine("BPM "+Tab.Rhythm.Bpm.ToString("0.##",CultureInfo.InvariantCulture)+" · 마디당 "+Tab.Rhythm.Meter+"박 · 첫 마디 "+Tab.Rhythm.Origin.ToString("0.000",CultureInfo.InvariantCulture)+"초 (수동 확인 필요)\r\n");
+            if(Tab.Rhythm.Available) text.AppendLine("4분음표 BPM "+Tab.Rhythm.Bpm.ToString("0.####",CultureInfo.InvariantCulture)+" · "+Tab.Rhythm.Meter+"/"+Tab.Rhythm.BeatUnit+" · 첫 마디 "+Tab.Rhythm.Origin.ToString("0.000000",CultureInfo.InvariantCulture)+"초 (수동 확인 필요)\r\n");
             string[] labels = {"e","B","G","D","A",resultTuning == 1 ? "D" : "E"};
             if(resultTuning == 2) labels = new[]{"eb","Bb","Gb","Db","Ab","Eb"};
             foreach(var measure in Tab.Notes.GroupBy(n=>Tab.Rhythm.Available ? Tab.Rhythm.BarAt(n.Start) : (int)(n.Start/10)+1)) {
@@ -258,12 +291,18 @@ namespace TabMaker {
             return text.ToString();
         }
         string JsonNotes() {
+            int firstBeat=Tab.Rhythm.Available ? (int)Math.Ceiling(Tab.Rhythm.BeatAt(analysisStart)) : 0;
+            int lastBeat=Tab.Rhythm.Available ? (int)Math.Floor(Tab.Rhythm.BeatAt(analysisEnd)) : -1;
+            double[] effectiveBeats=Enumerable.Range(firstBeat,Math.Max(0,lastBeat-firstBeat+1)).Select(i=>Tab.Rhythm.TimeAt(i)).ToArray();
             var data=new Dictionary<string,object> {
                 {"file",Path.GetFileName(path)},{"source",resultSource},{"stringNumbering","1 = highest string"},
                 {"tuning",Analysis.Tunings[resultTuning]},{"maxFret",resultFrets},
                 {"bpm",Tab.Rhythm.Available ? (object)Tab.Rhythm.Bpm : null},{"beatConfidence",Tab.Rhythm.Confidence},
-                {"beats",Tab.Rhythm.Beats},{"beatsPerBar",Tab.Rhythm.Meter},{"firstBarSeconds",Tab.Rhythm.Origin},
+                {"beats",effectiveBeats},{"detectedQuarterBeats",Tab.Rhythm.Beats},{"beatsPerBar",Tab.Rhythm.Meter},{"firstBarSeconds",Tab.Rhythm.Origin},
                 {"manualTempo",Tab.Rhythm.ManualTempo},{"downbeatDetected",false},
+                {"beatUnit",Tab.Rhythm.BeatUnit},{"bpmUnit","quarter"},{"useDetectedBeats",Tab.Rhythm.UseDetectedBeats},
+                {"effectiveGrid",Tab.Rhythm.UseDetectedBeats && !Tab.Rhythm.ManualTempo ? "detected" : "constant"},
+                {"part",Combo("Part").SelectedIndex==0 ? "poly" : "lead"},
                 {"notes",Tab.Notes.Select(n=>new Dictionary<string,object> {
                     {"start",n.Start},{"duration",n.Duration},{"midi",n.Midi},{"note",n.Name},
                     {"string",n.String<0 ? null : (object)(n.String+1)},{"fret",n.Fret<0 ? null : (object)n.Fret},

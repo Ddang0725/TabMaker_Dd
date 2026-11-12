@@ -12,6 +12,7 @@ using System.Web.Script.Serialization;
 namespace TabMaker {
     internal sealed class Transcription {
         public List<Note> Notes=new List<Note>();
+        public List<Note> CandidateNotes=new List<Note>(), LeadNotes=new List<Note>();
         public BeatMap Rhythm=new BeatMap();
         public string StemPath, Source;
     }
@@ -86,10 +87,17 @@ namespace TabMaker {
             result.Rhythm.Confidence=Convert.ToDouble(data["confidence"],CultureInfo.InvariantCulture);
             foreach(object value in (IEnumerable)data["beats"]) result.Rhythm.Beats.Add(Convert.ToDouble(value,CultureInfo.InvariantCulture));
             if(result.Rhythm.Beats.Count>0) result.Rhythm.Origin=result.Rhythm.Beats[0];
-            foreach(Dictionary<string,object> item in (IEnumerable)data["notes"]) {
-                result.Notes.Add(new Note {Start=Convert.ToDouble(item["start"]),Duration=Convert.ToDouble(item["duration"]),Midi=Convert.ToInt32(item["midi"]),Confidence=Convert.ToDouble(item["confidence"])});
-            }
+            if(data.ContainsKey("gridOrigin")) result.Rhythm.Origin=Convert.ToDouble(data["gridOrigin"],CultureInfo.InvariantCulture);
+            result.Notes=ReadNotes(data["notes"]);
+            result.CandidateNotes=data.ContainsKey("candidateNotes") ? ReadNotes(data["candidateNotes"]) : result.Notes;
+            result.LeadNotes=data.ContainsKey("leadNotes") ? ReadNotes(data["leadNotes"]) : result.Notes;
             return result;
+        }
+        static List<Note> ReadNotes(object data) {
+            List<Note> notes=new List<Note>();
+            foreach(Dictionary<string,object> item in (IEnumerable)data)
+                notes.Add(new Note {Start=Convert.ToDouble(item["start"]),Duration=Convert.ToDouble(item["duration"]),Midi=Convert.ToInt32(item["midi"]),Confidence=Convert.ToDouble(item["confidence"])});
+            return notes;
         }
     }
 }

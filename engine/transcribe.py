@@ -23,6 +23,21 @@ def emit(stage, percent):
     print(json.dumps(dict(stage=stage, progress=percent), ensure_ascii=False), flush=True)
 
 
+def fit_beat_grid(times):
+    """Refine constant tempo only when the tracked beats support a stable grid."""
+    times = np.asarray(times, dtype=float)
+    if len(times) < 8: return None
+    indices = np.arange(len(times), dtype=float)
+    keep = np.ones(len(times), dtype=bool)
+    for _ in range(3):
+        period, origin = np.polyfit(indices[keep], times[keep], 1)
+        residual = times-(origin+period*indices)
+        keep = abs(residual) <= max(.025, period*.12)
+        if keep.sum() < len(times)*.85: return None
+    if period <= 0 or np.percentile(abs(residual),90) > period*.08: return None
+    return dict(bpm=round(60/period,4), gridOrigin=float(origin), gridStable=True)
+
+
 def read_audio(path, start, duration):
     import imageio_ffmpeg
     command = [imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error',
@@ -116,8 +131,11 @@ def tempo_and_beats(mono, rate, start=0.0):
         times = np.insert(times,0,times[0]-period/fps)
     while times[-1] < len(mono)/rate-period/fps:
         times = np.append(times,times[-1]+period/fps)
-    return dict(bpm=round(bpm,2), confidence=round(float(np.clip(correlation[lag],0,1)),3),
-                beats=[round(start+float(t),5) for t in times])
+    result = dict(bpm=round(bpm,4), confidence=round(float(np.clip(correlation[lag],0,1)),3),
+                  beats=[round(start+float(t),5) for t in times], gridStable=False)
+    fitted = fit_beat_grid(times+start)
+    if fitted: result.update(fitted)
+    return result
 
 
 def separate_guitar(stereo, model_home):
@@ -402,15 +420,18 @@ def main():
         guitar = original
     emit('기타의 여러 음과 실제 시작 시점을 채보하고 있어요',75)
     if args.transcriber == 'basic-pitch':
-        notes = basic_pitch_notes(guitar,args.start,polyphonic=args.part=='poly')
+        candidates = basic_pitch_notes(guitar,args.start,polyphonic=True)
     else:
-        notes = multipitch(mono_for_analysis(guitar)[::2],22050,args.start,polyphonic=args.part=='poly',threshold=args.threshold)
+        candidates = multipitch(mono_for_analysis(guitar)[::2],22050,args.start,polyphonic=True,threshold=args.threshold)
+    events = [(n['start']-args.start,n['start']-args.start+n['duration'],n['midi'],n['confidence']) for n in candidates]
+    lead_notes = convert_pitch_events(events,guitar.shape[1]/44100,args.start,False)
+    notes = candidates if args.part=='poly' else lead_notes
     output = Path(args.output)
     output.parent.mkdir(parents=True,exist_ok=True)
     stem_path = output.with_suffix('.guitar.wav')
     write_wav(stem_path,guitar)
     source = ('mel_band_roformer_guitar' if args.separator=='roformer' else 'demucs_6s_guitar') if args.mode=='mix' else 'isolated_guitar'
-    result = dict(**rhythm,notes=notes,source=source,transcriber=args.transcriber,
+    result = dict(**rhythm,notes=notes,candidateNotes=candidates,leadNotes=lead_notes,source=source,transcriber=args.transcriber,
                   inputPath=str(Path(args.input).resolve()),part=args.part,
                   stem=str(stem_path),stemStart=args.start,downbeatDetected=False)
     temporary = output.with_suffix('.tmp')
